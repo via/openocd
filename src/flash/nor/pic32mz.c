@@ -81,6 +81,7 @@
 #define PIC32MZ_NVMDATA2		0xBF800650
 #define PIC32MZ_NVMDATA3		0xBF800660
 #define PIC32MZ_NVMSRCADDR	0xBF800670
+
 #define PIC32MZ_NVMPWP	0xBF800680
 #define PIC32MZ_NVMBWP	0xBF800690
 
@@ -170,6 +171,32 @@ static int pic32mz_nvm_exec(struct flash_bank *bank, uint32_t op, uint32_t timeo
 	return status;
 }
 
+/* Use unlock sequence to write to NVMPWP */
+static int pic32mz_nvm_write_nvmpwp(struct target *target, uint32_t nvmpwp)
+{
+	/* unlock flash registers */
+	target_write_u32(target, PIC32MZ_NVMKEY, 0);
+	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY1);
+	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY2);
+
+	/* Unlock access to NVMPWP */
+	target_write_u32(target, PIC32MZ_NVMPWP, nvmpwp);
+	return ERROR_OK;
+}
+
+/* Use unlock sequence to write to NVMBWP */
+static int pic32mz_nvm_write_nvmbwp(struct target *target, uint32_t nvmbwp)
+{
+	/* unlock flash registers */
+	target_write_u32(target, PIC32MZ_NVMKEY, 0);
+	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY1);
+	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY2);
+
+	/* Unlock access to NVMPWP */
+	target_write_u32(target, PIC32MZ_NVMBWP, nvmbwp);
+	return ERROR_OK;
+}
+
 static int pic32mz_protect_check(struct flash_bank *bank)
 {
 	struct target *target = bank->target;
@@ -190,11 +217,11 @@ static int pic32mz_protect_check(struct flash_bank *bank)
       bank->sectors[s].is_protected = 1;
 
     /* Upper program area is sectors 0-4 and NVMBWP bits 0-4 */
-    for (int b = 0; b < 5; b++)
+    for (int b = 0; b <= 4; b++)
       bank->sectors[b].is_protected = (nvmbwp & (1 << b)) ? 1 : 0;
 
-    /* Upper program area is sectors 8-12 and NVMBWP bits 8-12 */
-    for (int b = 8; b < 13; b++)
+    /* Lower program area is sectors 8-12 and NVMBWP bits 8-12 */
+    for (int b = 8; b <= 12; b++)
       bank->sectors[b].is_protected = (nvmbwp & (1 << b)) ? 1 : 0;
 
 	} else {
@@ -266,10 +293,28 @@ static int pic32mz_protect(struct flash_bank *bank, int set, unsigned int first,
 		/* pgm flash */
     uint32_t nvmbwp;
     target_read_u32(target, PIC32MZ_NVMBWP, &nvmbwp);
+    
+    for (unsigned int b = first; b <= last; b++) {
+      /* Valid areas to set are the lower and upper areas */
+      if ((b <= 4) ||
+          ((b >= 8) && (b <= 12))) {
+        if (set) {
+          nvmbwp |= (1 << b);
+        } else {
+          nvmbwp &= ~(1 << b);
+        }
+      }
+    }
+
+    pic32mz_nvm_write_nvmbwp(target, nvmbwp);
 
 	} else {
     uint32_t nvmpwp;
     target_read_u32(target, PIC32MZ_NVMPWP, &nvmpwp);
+    /* MZ uses a water mark approach for protection.  Addresses below PWP are
+     * protected.  We will always try to honor the full request, understanding
+     * that it will probably protect/unprotect more than desired */
+    pic32mz_nvm_write_nvmpwp(target, nvmpwp);
 	}
 
 
