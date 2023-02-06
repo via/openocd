@@ -148,25 +148,37 @@ static uint32_t pic32mz_wait_status_busy(struct flash_bank *bank, int timeout)
 	return status;
 }
 
-static int pic32mz_nvm_exec(struct flash_bank *bank, uint32_t op, uint32_t timeout)
-{
-	struct target *target = bank->target;
-	uint32_t status;
-
-	target_write_u32(target, PIC32MZ_NVMCON, NVMCON_WREN | op);
-
+static void pic32mz_unlock(struct target *target) {
 	/* unlock flash registers */
 	target_write_u32(target, PIC32MZ_NVMKEY, 0);
 	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY1);
 	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY2);
+}
 
+static int pic32mz_nvm_exec(struct flash_bank *bank, uint32_t op, uint32_t timeout)
+{
+	struct target *target = bank->target;
+
+	target_write_u32(target, PIC32MZ_NVMCON, NVMCON_WREN | op);
+
+  pic32mz_unlock(target);
 	/* start operation */
 	target_write_u32(target, PIC32MZ_NVMCONSET, NVMCON_WR);
 
-	status = pic32mz_wait_status_busy(bank, timeout);
+	pic32mz_wait_status_busy(bank, timeout);
 
 	/* lock flash registers */
 	target_write_u32(target, PIC32MZ_NVMCONCLR, NVMCON_WREN);
+
+  uint32_t status = pic32mz_get_flash_status(bank);
+
+  /* WRERR will not clear itself unless an explicit NOP is sent */
+  if (status & NVMCON_WRERR) {
+    target_write_u32(target, PIC32MZ_NVMCON, NVMCON_WREN | NVMCON_OP_NOP);
+    pic32mz_unlock(target);
+    target_write_u32(target, PIC32MZ_NVMCONSET, NVMCON_WR);
+    pic32mz_wait_status_busy(bank, timeout);
+  }
 
 	return status;
 }
@@ -175,9 +187,7 @@ static int pic32mz_nvm_exec(struct flash_bank *bank, uint32_t op, uint32_t timeo
 static int pic32mz_nvm_write_nvmpwp(struct target *target, uint32_t nvmpwp)
 {
 	/* unlock flash registers */
-	target_write_u32(target, PIC32MZ_NVMKEY, 0);
-	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY1);
-	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY2);
+  pic32mz_unlock(target);
 
 	/* Unlock access to NVMPWP */
 	target_write_u32(target, PIC32MZ_NVMPWP, nvmpwp);
@@ -188,9 +198,7 @@ static int pic32mz_nvm_write_nvmpwp(struct target *target, uint32_t nvmpwp)
 static int pic32mz_nvm_write_nvmbwp(struct target *target, uint32_t nvmbwp)
 {
 	/* unlock flash registers */
-	target_write_u32(target, PIC32MZ_NVMKEY, 0);
-	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY1);
-	target_write_u32(target, PIC32MZ_NVMKEY, NVMKEY2);
+  pic32mz_unlock(target);
 
 	/* Unlock access to NVMPWP */
 	target_write_u32(target, PIC32MZ_NVMBWP, nvmbwp);
